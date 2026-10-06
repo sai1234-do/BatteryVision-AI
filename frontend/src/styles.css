@@ -1,0 +1,1015 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Inter:wght@400;500;600;700;800&display=swap');
+
+:root {
+  --bg: #0a0e10;
+  --surface: #101619;
+  --surface-2: #151c20;
+  --border: #273238;
+
+  --text: #f1f5f5;
+  --muted: #8c999e;
+  --dim: #5e6a70;
+
+  --green: #31c48d;
+  --orange: #f0a83b;
+  --red: #ef5b5b;
+  --blue: #4fa3d1;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Inter", sans-serif;
+}
+
+button,
+input {
+  font-family: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.app {
+  min-height: 100vh;
+  background:
+    radial-gradient(
+      circle at 80% 0%,
+      rgba(79, 163, 209, 0.045),
+      transparent 25%
+    ),
+    var(--bg);
+}
+
+
+/* =========================
+   TOP BAR
+========================= */
+
+.topbar {
+  height: 78px;
+  padding: 0 5vw;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+}
+
+.brand-mark {
+  width: 38px;
+  height: 38px;
+
+  display: grid;
+  place-items: center;
+
+  border: 1px solid var(--blue);
+
+  color: var(--blue);
+
+  font-family: "DM Mono", monospace;
+  font-size: 13px;
+}
+
+.brand-name {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.brand-name span {
+  color: var(--blue);
+}
+
+.brand-subtitle {
+  margin-top: 3px;
+
+  color: var(--dim);
+
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+}
+
+.system-status {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+
+  color: var(--muted);
+
+  font-family: "DM Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+
+  border-radius: 50%;
+  background: var(--green);
+
+  box-shadow: 0 0 12px rgba(49, 196, 141, 0.6);
+}
+
+
+/* =========================
+   MAIN
+========================= */
+
+.main {
+  width: min(1400px, 90%);
+  margin: auto;
+  padding: 70px 0;
+}
+
+
+/* =========================
+   HERO
+========================= */
+
+.hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+
+  margin-bottom: 55px;
+}
+
+.eyebrow {
+  color: var(--blue);
+
+  font-family: "DM Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+}
+
+.hero h1 {
+  margin: 15px 0;
+
+  font-size: clamp(48px, 7vw, 92px);
+  line-height: 0.9;
+  letter-spacing: -0.065em;
+}
+
+.hero h1 span {
+  color: var(--muted);
+}
+
+.hero p {
+  max-width: 580px;
+
+  color: var(--muted);
+  line-height: 1.7;
+  font-size: 14px;
+}
+
+.model-badge {
+  min-width: 170px;
+
+  padding: 20px;
+
+  border-left: 1px solid var(--border);
+}
+
+.model-badge span,
+.model-badge small {
+  display: block;
+
+  color: var(--dim);
+
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+  letter-spacing: 0.15em;
+}
+
+.model-badge strong {
+  display: block;
+
+  margin: 7px 0;
+
+  font-size: 21px;
+}
+
+
+/* =========================
+   PANELS
+========================= */
+
+.inspection-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 0.9fr;
+  gap: 1px;
+
+  background: var(--border);
+
+  border: 1px solid var(--border);
+}
+
+.panel {
+  min-height: 550px;
+  background: var(--surface);
+}
+
+.panel-header {
+  height: 65px;
+
+  padding: 0 25px;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  border-bottom: 1px solid var(--border);
+}
+
+.panel-index {
+  margin-right: 12px;
+
+  color: var(--blue);
+
+  font-family: "DM Mono", monospace;
+  font-size: 10px;
+}
+
+.panel-title {
+  font-family: "DM Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+}
+
+.text-button {
+  background: none;
+  border: none;
+
+  color: var(--dim);
+
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+}
+
+.text-button:hover {
+  color: var(--text);
+}
+
+
+/* =========================
+   UPLOAD
+========================= */
+
+.upload-zone {
+  height: calc(550px - 65px);
+  margin: 25px;
+
+  border: 1px dashed #344148;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+
+  text-align: center;
+
+  transition: 0.2s;
+}
+
+.upload-zone:hover,
+.upload-zone.drag-active {
+  border-color: var(--blue);
+  background: rgba(79, 163, 209, 0.025);
+}
+
+.upload-icon {
+  width: 58px;
+  height: 58px;
+
+  display: grid;
+  place-items: center;
+
+  border: 1px solid var(--border);
+
+  color: var(--blue);
+
+  font-size: 27px;
+}
+
+.upload-zone h3 {
+  margin: 20px 0 7px;
+
+  font-size: 14px;
+  letter-spacing: 0.08em;
+}
+
+.upload-zone p {
+  margin: 0;
+
+  color: var(--muted);
+
+  font-size: 12px;
+}
+
+.upload-format {
+  margin: 15px 0;
+
+  color: var(--dim);
+
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+}
+
+.select-button {
+  padding: 11px 18px;
+
+  border: 1px solid var(--border);
+
+  color: var(--text);
+
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+}
+
+
+/* =========================
+   PREVIEW
+========================= */
+
+.preview-container {
+  padding: 25px;
+}
+
+.preview-image {
+  width: 100%;
+  height: 395px;
+
+  object-fit: contain;
+
+  background: #080b0d;
+
+  border: 1px solid var(--border);
+}
+
+.image-meta {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+
+  gap: 20px;
+
+  padding-top: 18px;
+}
+
+.image-meta span,
+.result-details span {
+  display: block;
+
+  margin-bottom: 5px;
+
+  color: var(--dim);
+
+  font-family: "DM Mono", monospace;
+  font-size: 8px;
+  letter-spacing: 0.12em;
+}
+
+.image-meta strong,
+.result-details strong {
+  display: block;
+
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  font-size: 11px;
+}
+
+
+/* =========================
+   RESULT
+========================= */
+
+.empty-result {
+  height: calc(550px - 65px);
+
+  display: grid;
+  place-items: center;
+
+  position: relative;
+
+  overflow: hidden;
+}
+
+.scan-line {
+  position: absolute;
+
+  width: 100%;
+  height: 1px;
+
+  background: var(--blue);
+
+  opacity: 0.15;
+
+  animation: scan 3s infinite ease-in-out;
+}
+
+@keyframes scan {
+  0% {
+    top: 15%;
+  }
+
+  50% {
+    top: 85%;
+  }
+
+  100% {
+    top: 15%;
+  }
+}
+
+.result-placeholder {
+  text-align: center;
+}
+
+.result-placeholder span {
+  display: block;
+
+  color: var(--dim);
+
+  font-family: "DM Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+}
+
+.result-placeholder small {
+  display: block;
+
+  margin-top: 12px;
+
+  color: #414d52;
+
+  font-size: 11px;
+}
+
+.result-content {
+  padding: 55px 40px;
+}
+
+.result-label {
+  color: var(--dim);
+
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+  letter-spacing: 0.15em;
+}
+
+.prediction {
+  margin: 12px 0 42px;
+
+  font-size: clamp(36px, 4vw, 55px);
+  font-weight: 800;
+  letter-spacing: -0.045em;
+
+  overflow-wrap: anywhere;
+}
+
+.confidence-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+}
+
+.confidence-number {
+  display: block;
+
+  font-size: 37px;
+  font-weight: 700;
+}
+
+.confidence-label {
+  display: block;
+
+  margin-top: 5px;
+
+  color: var(--dim);
+
+  font-family: "DM Mono", monospace;
+  font-size: 8px;
+  letter-spacing: 0.12em;
+}
+
+.confidence-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.confidence-status span {
+  width: 7px;
+  height: 7px;
+
+  border-radius: 50%;
+}
+
+.confidence-status.high {
+  color: var(--green);
+}
+
+.confidence-status.high span {
+  background: var(--green);
+}
+
+.confidence-status.moderate {
+  color: var(--orange);
+}
+
+.confidence-status.moderate span {
+  background: var(--orange);
+}
+
+.confidence-status.low {
+  color: var(--red);
+}
+
+.confidence-status.low span {
+  background: var(--red);
+}
+
+.confidence-meter {
+  height: 4px;
+
+  margin: 20px 0 35px;
+
+  background: #252d31;
+}
+
+.confidence-fill {
+  height: 100%;
+
+  background: var(--green);
+
+  transition: width 0.8s ease;
+}
+
+.result-details {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+
+  gap: 20px;
+
+  padding-top: 25px;
+
+  border-top: 1px solid var(--border);
+}
+
+.live-label {
+  color: var(--green);
+
+  font-family: "DM Mono", monospace;
+  font-size: 8px;
+}
+
+
+/* =========================
+   ACTION
+========================= */
+
+.action-row {
+  display: flex;
+  align-items: center;
+  gap: 25px;
+
+  margin: 20px 0 80px;
+}
+
+.analyze-button {
+  min-width: 240px;
+
+  padding: 18px 22px;
+
+  display: flex;
+  justify-content: space-between;
+
+  border: none;
+
+  background: var(--text);
+  color: #090d0f;
+
+  font-family: "DM Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+
+  transition: 0.2s;
+}
+
+.analyze-button:hover:not(:disabled) {
+  transform: translateY(-2px);
+  background: var(--blue);
+  color: white;
+}
+
+.analyze-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.25;
+}
+
+.arrow {
+  font-size: 17px;
+}
+
+.error-message {
+  color: var(--red);
+
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+}
+
+
+/* =========================
+   EVIDENCE
+========================= */
+
+.evidence-section {
+  margin-bottom: 100px;
+}
+
+.section-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+
+  padding-bottom: 18px;
+
+  border-bottom: 1px solid var(--border);
+}
+
+.section-note {
+  color: var(--dim);
+
+  font-family: "DM Mono", monospace;
+  font-size: 8px;
+  letter-spacing: 0.1em;
+}
+
+.evidence-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+
+  margin-top: 20px;
+}
+
+.evidence-image {
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.evidence-label {
+  padding: 13px 15px;
+
+  color: var(--dim);
+
+  border-bottom: 1px solid var(--border);
+
+  font-family: "DM Mono", monospace;
+  font-size: 8px;
+  letter-spacing: 0.12em;
+}
+
+.evidence-image img {
+  display: block;
+
+  width: 100%;
+  height: 440px;
+
+  object-fit: contain;
+
+  background: #080b0d;
+}
+
+.evidence-description {
+  display: flex;
+  gap: 15px;
+
+  margin-top: 20px;
+  padding: 22px;
+
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.evidence-indicator {
+  width: 3px;
+
+  flex-shrink: 0;
+
+  background: var(--blue);
+}
+
+.evidence-description strong {
+  font-size: 13px;
+}
+
+.evidence-description p {
+  margin: 7px 0 0;
+
+  color: var(--muted);
+
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.disclaimer {
+  margin-top: 13px;
+
+  color: var(--dim);
+
+  font-family: "DM Mono", monospace;
+  font-size: 8px;
+  line-height: 1.6;
+}
+
+
+/* =========================
+   PIPELINE
+========================= */
+
+.pipeline-section {
+  margin-bottom: 100px;
+}
+
+.pipeline {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+
+  margin-top: 20px;
+
+  border: 1px solid var(--border);
+}
+
+.pipeline-step {
+  min-height: 130px;
+
+  padding: 22px;
+
+  position: relative;
+
+  border-right: 1px solid var(--border);
+
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.pipeline-step:last-child {
+  border-right: none;
+}
+
+.pipeline-number {
+  color: var(--blue);
+
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+}
+
+.pipeline-step strong {
+  font-size: 13px;
+  letter-spacing: 0.03em;
+}
+
+.pipeline-arrow {
+  position: absolute;
+
+  right: -7px;
+  top: 50%;
+
+  z-index: 2;
+
+  color: var(--blue);
+
+  background: var(--bg);
+
+  font-size: 14px;
+}
+
+
+/* =========================
+   REPORT
+========================= */
+
+.report-section {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+
+  padding: 45px;
+
+  border: 1px solid var(--border);
+
+  background: var(--surface);
+}
+
+.report-section h2 {
+  margin: 10px 0;
+
+  font-size: 27px;
+  letter-spacing: -0.03em;
+}
+
+.report-section p {
+  max-width: 580px;
+
+  margin: 0;
+
+  color: var(--muted);
+
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.report-button {
+  padding: 16px 20px;
+
+  border: 1px solid var(--border);
+
+  background: transparent;
+  color: var(--text);
+
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+
+  white-space: nowrap;
+
+  transition: 0.2s;
+}
+
+.report-button:hover:not(:disabled) {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.report-button:disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+}
+
+.report-button span {
+  margin-left: 20px;
+}
+
+
+/* =========================
+   FOOTER
+========================= */
+
+footer {
+  padding: 25px 5vw;
+
+  display: flex;
+  justify-content: space-between;
+
+  border-top: 1px solid var(--border);
+
+  color: var(--dim);
+
+  font-family: "DM Mono", monospace;
+  font-size: 8px;
+  letter-spacing: 0.1em;
+}
+
+
+/* =========================
+   RESPONSIVE
+========================= */
+
+@media (max-width: 900px) {
+
+  .hero {
+    display: block;
+  }
+
+  .model-badge {
+    margin-top: 35px;
+  }
+
+  .inspection-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .evidence-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pipeline {
+    grid-template-columns: 1fr;
+  }
+
+  .pipeline-step {
+    min-height: 90px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .pipeline-step:last-child {
+    border-bottom: none;
+  }
+
+  .pipeline-arrow {
+    display: none;
+  }
+
+  .report-section {
+    display: block;
+  }
+
+  .report-button {
+    margin-top: 30px;
+  }
+
+  footer {
+    flex-direction: column;
+    gap: 10px;
+  }
+}
+
+@media (max-width: 600px) {
+
+  .main {
+    width: 94%;
+    padding: 40px 0;
+  }
+
+  .topbar {
+    padding: 0 3%;
+  }
+
+  .system-status {
+    display: none;
+  }
+
+  .hero h1 {
+    font-size: 58px;
+  }
+
+  .panel {
+    min-height: 480px;
+  }
+
+  .upload-zone {
+    height: 380px;
+  }
+
+  .preview-image {
+    height: 300px;
+  }
+
+  .result-content {
+    padding: 40px 25px;
+  }
+
+  .confidence-row {
+    display: block;
+  }
+
+  .confidence-status {
+    margin-top: 18px;
+  }
+
+  .action-row {
+    display: block;
+  }
+
+  .analyze-button {
+    width: 100%;
+  }
+
+  .error-message {
+    margin-top: 15px;
+  }
+
+  .evidence-image img {
+    height: 300px;
+  }
+
+  .report-section {
+    padding: 28px;
+  }
+}
