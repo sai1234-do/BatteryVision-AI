@@ -1,4 +1,3 @@
-
 # ============================================================
 # BatteryVision AI — Production Backend
 # ============================================================
@@ -6,19 +5,9 @@
 import os
 import io
 import base64
-import tempfile
 from datetime import datetime
 
 import numpy as np
-
-import matplotlib
-matplotlib.use("Agg")
-
-import matplotlib.pyplot as plt
-
-import torch
-import torch.nn.functional as F
-from torchvision import models, transforms
 
 from PIL import Image
 
@@ -33,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from docx import Document
-from docx.shared import Inches, Pt
+from docx.shared import Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 
@@ -65,15 +54,17 @@ os.makedirs(REPORTS_PATH, exist_ok=True)
 # Production device
 # ============================================================
 
-device = torch.device("cpu")
+# Keep this lightweight at startup.
+# The actual PyTorch device is created when the model is loaded.
+device = "cpu"
 
 print("BatteryVision AI starting...")
 print("Device:", device)
 
-# ============================================
-# 03 — DATASET + FIXED SPLIT
-# CELL 3 — Class Names
-# ============================================
+
+# ============================================================
+# Class Names
+# ============================================================
 
 class_names = [
     "Tin_bad",
@@ -93,44 +84,169 @@ print("Classes:")
 for index, class_name in enumerate(class_names):
     print(index, "->", class_name)
 
-# ============================================
-# 09 — GRAD-CAM
-# CELL 1 — Imports + Target Layer
-# ============================================
 
-import torch
-import torch.nn.functional as F
-import matplotlib.pyplot as plt
-import numpy as np
-from torchvision import models
+# ============================================================
+# Lazy Model State
+# ============================================================
 
-# Instantiate ResNet18 model structure
-resnet = models.resnet18(weights=None)
-num_ftrs = resnet.fc.in_features
-resnet.fc = torch.nn.Linear(num_ftrs, NUM_CLASSES)
+# The model is intentionally NOT loaded during application startup.
+#
+# This allows the web server to start first on resource-limited
+# deployment platforms such as Render Free.
+#
+# The model will be loaded automatically when /predict or /report
+# receives the first image request.
 
-# Load the fine-tuned model checkpoint
-if os.path.exists(FINETUNED_MODEL_PATH):
-    checkpoint = torch.load(FINETUNED_MODEL_PATH, map_location=device, weights_only=False)
-    # Extract the actual weights from 'model_state_dict'
-    resnet.load_state_dict(checkpoint["model_state_dict"])
-    print("Loaded fine-tuned ResNet18 checkpoint successfully.")
-else:
-    print(f"Warning: Checkpoint not found at {FINETUNED_MODEL_PATH}")
+resnet = None
+target_layer = None
 
-resnet = resnet.to(device)
-resnet.eval()
 
-# Grad-CAM target layer
-target_layer = resnet.layer4[-1]
+# ============================================================
+# Lazy Model Loader
+# ============================================================
 
-print("Grad-CAM target layer:")
-print(target_layer)
+def load_model():
+    """
+    Load the fine-tuned ResNet18 model only when it is needed.
 
-# ============================================
-# 09 — GRAD-CAM
-# CELL 2 — Grad-CAM Function
-# ============================================
+    This prevents PyTorch, Torchvision model construction, and
+    the checkpoint from being loaded during FastAPI startup.
+    """
+
+    global resnet
+    global target_layer
+    global device
+
+    # Model already loaded.
+    if resnet is not None:
+        return
+
+    print("Loading fine-tuned ResNet18...")
+
+    # Heavy ML imports are intentionally delayed until inference.
+    import torch
+    from torchvision import models
+
+    device = torch.device("cpu")
+
+    # Instantiate ResNet18 model structure.
+    model = models.resnet18(weights=None)
+
+    num_ftrs = model.fc.in_features
+
+    model.fc = torch.nn.Linear(
+        num_ftrs,
+        NUM_CLASSES
+    )
+
+    # Verify checkpoint exists.
+    if not os.path.exists(FINETUNED_MODEL_PATH):
+
+        raise FileNotFoundError(
+            f"Checkpoint not found at {FINETUNED_MODEL_PATH}"
+        )
+
+    # Load fine-tuned checkpoint.
+    checkpoint = torch.load(
+        FINETUNED_MODEL_PATH,
+        map_location=device,
+        weights_only=False
+    )
+
+    # Load trained weights.
+    model.load_state_dict(
+        checkpoint["model_state_dict"]
+    )
+
+    model = model.to(device)
+
+    model.eval()
+
+    # Store globally for subsequent requests.
+    resnet = model
+
+    # Grad-CAM target layer.
+    target_layer = resnet.layer4[-1]
+
+    print(
+        "Loaded fine-tuned ResNet18 checkpoint successfully."
+    )
+
+    print(
+        "Grad-CAM target layer:"
+    )
+
+    print(target_layer)
+
+
+# ============================================================
+# FastAPI Application
+# ============================================================
+
+app = FastAPI(
+    title="BatteryVision AI API",
+    description="AI-Assisted Battery Surface Inspection API",
+    version="1.0.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
+
+print("FastAPI application created.")
+
+
+# ============================================================
+# Health Endpoint
+# ============================================================
+
+@app.get("/health")
+def health_check():
+
+    return {
+        "status": "healthy",
+        "model": "Fine-tuned ResNet18",
+        "device": str(device),
+        "num_classes": len(class_names)
+    }
+
+
+print("Health endpoint registered.")
+
+
+# ============================================================
+# Image Validation
+# ============================================================
+
+ALLOWED_IMAGE_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp"
+}
+
+
+def validate_image_file(file):
+
+    if file.content_type not in ALLOWED_IMAGE_TYPES:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Unsupported image format. "
+                "Use JPEG, PNG, or WEBP."
+            )
+        )
+
+
+# ============================================================
+# Grad-CAM
+# ============================================================
 
 def generate_gradcam(
     model,
@@ -139,21 +255,25 @@ def generate_gradcam(
     device
 ):
 
+    # Import PyTorch functionality only when Grad-CAM
+    # is actually requested.
+    import torch.nn.functional as F
+
     model.eval()
 
-    # Store activations and gradients
+    # Store activations and gradients.
     activations = []
     gradients = []
 
-    # Forward hook
+    # Forward hook.
     def forward_hook(module, input, output):
         activations.append(output)
 
-    # Backward hook
+    # Backward hook.
     def backward_hook(module, grad_input, grad_output):
         gradients.append(grad_output[0])
 
-    # Register hooks
+    # Register hooks.
     forward_handle = target_layer.register_forward_hook(
         forward_hook
     )
@@ -162,94 +282,108 @@ def generate_gradcam(
         backward_hook
     )
 
-    # Prepare image
-    image = image_tensor.unsqueeze(0).to(device)
+    try:
 
-    # Forward pass
-    output = model(image)
+        # Prepare image.
+        image = image_tensor.unsqueeze(0).to(device)
 
-    # Predicted class
-    predicted_class = output.argmax(dim=1).item()
+        # Forward pass.
+        output = model(image)
 
-    # Score of predicted class
-    score = output[0, predicted_class]
+        # Predicted class.
+        predicted_class = output.argmax(
+            dim=1
+        ).item()
 
-    # Clear gradients
-    model.zero_grad()
+        # Score of predicted class.
+        score = output[
+            0,
+            predicted_class
+        ]
 
-    # Backpropagate
-    score.backward()
+        # Clear gradients.
+        model.zero_grad()
 
-    # Remove hooks
-    forward_handle.remove()
-    backward_handle.remove()
+        # Backpropagate.
+        score.backward()
 
-    # Get stored values
-    activation = activations[0]
-    gradient = gradients[0]
+        # Get stored values.
+        activation = activations[0]
+        gradient = gradients[0]
 
-    # Average gradient over height and width
-    weights = gradient.mean(
-        dim=(2, 3),
-        keepdim=True
-    )
+        # Average gradient over height and width.
+        weights = gradient.mean(
+            dim=(2, 3),
+            keepdim=True
+        )
 
-    # Weighted combination of feature maps
-    cam = (
-        weights * activation
-    ).sum(
-        dim=1,
-        keepdim=True
-    )
+        # Weighted combination of feature maps.
+        cam = (
+            weights * activation
+        ).sum(
+            dim=1,
+            keepdim=True
+        )
 
-    # ReLU
-    cam = F.relu(cam)
+        # ReLU.
+        cam = F.relu(cam)
 
-    # Resize heatmap to image size
-    cam = F.interpolate(
-        cam,
-        size=(224, 224),
-        mode="bilinear",
-        align_corners=False
-    )
+        # Resize heatmap to image size.
+        cam = F.interpolate(
+            cam,
+            size=(224, 224),
+            mode="bilinear",
+            align_corners=False
+        )
 
-    # Remove unnecessary dimensions
-    cam = (
-        cam.squeeze()
-        .detach()
-        .cpu()
-        .numpy()
-    )
+        # Remove unnecessary dimensions.
+        cam = (
+            cam.squeeze()
+            .detach()
+            .cpu()
+            .numpy()
+        )
 
-    # Normalize between 0 and 1
-    cam = cam - cam.min()
+        # Normalize between 0 and 1.
+        cam = cam - cam.min()
 
-    if cam.max() > 0:
-        cam = cam / cam.max()
+        if cam.max() > 0:
+            cam = cam / cam.max()
 
-    return cam, predicted_class
+        return cam, predicted_class
 
-# ============================================
-# 10 — INFERENCE PIPELINE
-# CELL 1 — Configuration
-# ============================================
+    finally:
+
+        # Always remove hooks, even if inference fails.
+        forward_handle.remove()
+        backward_handle.remove()
+
+
+# ============================================================
+# Inference Configuration
+# ============================================================
 
 INFERENCE_IMAGE_SIZE = 224
 
-print("Inference configuration ready ✅")
+print("Inference configuration ready.")
 print("Image size:", INFERENCE_IMAGE_SIZE)
 print("Model:", "Fine-tuned ResNet18")
 print("Classes:", class_names)
 
-# ============================================
-# CELL 2 — Image Preprocessing
-# ============================================
+
+# ============================================================
+# Image Preprocessing
+# ============================================================
 
 def preprocess_image(image):
     """
     Convert a PIL image into the tensor format
     expected by the fine-tuned ResNet18.
     """
+
+    # Torchvision is imported only when an image
+    # actually needs preprocessing.
+    from torchvision import transforms
 
     transform = transforms.Compose([
         transforms.Resize(256),
@@ -261,20 +395,33 @@ def preprocess_image(image):
         )
     ])
 
-    return transform(image.convert("RGB"))
+    return transform(
+        image.convert("RGB")
+    )
 
-# ============================================
-# CELL 3 — Prediction
-# ============================================
+
+# ============================================================
+# Prediction
+# ============================================================
 
 def predict_image(image):
 
+    # Ensure model is loaded before inference.
+    load_model()
+
+    import torch
+
     model_input = preprocess_image(image)
-    model_input = model_input.unsqueeze(0).to(device)
+
+    model_input = model_input.unsqueeze(
+        0
+    ).to(device)
 
     with torch.inference_mode():
 
-        output = resnet(model_input)
+        output = resnet(
+            model_input
+        )
 
         probabilities = torch.softmax(
             output,
@@ -296,16 +443,22 @@ def predict_image(image):
         "confidence": confidence
     }
 
-# ============================================
-# CELL 5 — Complete Image Analysis
-# ============================================
+
+# ============================================================
+# Complete Image Analysis
+# ============================================================
 
 def analyze_image(
     image,
     generate_explanation=True
 ):
 
-    prediction = predict_image(image)
+    # Ensure model is loaded.
+    load_model()
+
+    prediction = predict_image(
+        image
+    )
 
     result = {
         "prediction": prediction["class_name"],
@@ -315,7 +468,9 @@ def analyze_image(
 
     if generate_explanation:
 
-        image_tensor = preprocess_image(image)
+        image_tensor = preprocess_image(
+            image
+        )
 
         cam, predicted_class = generate_gradcam(
             model=resnet,
@@ -325,7 +480,10 @@ def analyze_image(
         )
 
         result["gradcam"] = cam
-        result["predicted_class_index"] = predicted_class
+
+        result["predicted_class_index"] = (
+            predicted_class
+        )
 
     else:
 
@@ -333,24 +491,14 @@ def analyze_image(
 
     return result
 
-# ============================================
-# 11 — REPORT GENERATOR
-# CELL 1 — Configuration
-# ============================================
 
-from docx import Document
-from docx.shared import Inches, Pt
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from datetime import datetime
+# ============================================================
+# Report Generator
+# ============================================================
 
-os.makedirs(REPORTS_PATH, exist_ok=True)
-
-print("Report generator configuration ready ✅")
+print("Report generator configuration ready.")
 print("Report directory:", REPORTS_PATH)
 
-# ============================================
-# CELL 2 — Report Generator
-# ============================================
 
 def generate_battery_report(
     image,
@@ -398,6 +546,7 @@ def generate_battery_report(
     )
 
     prediction = result["prediction"]
+
     confidence = result["confidence"]
 
     document.add_paragraph(
@@ -417,10 +566,15 @@ def generate_battery_report(
     # ----------------------------------------
 
     if confidence >= 0.80:
+
         confidence_note = "High confidence"
+
     elif confidence >= 0.60:
+
         confidence_note = "Moderate confidence"
+
     else:
+
         confidence_note = "Low confidence"
 
     document.add_paragraph(
@@ -463,7 +617,15 @@ def generate_battery_report(
 
         cam = result["gradcam"]
 
-        # Create visualization
+        # Import Matplotlib only when generating
+        # the visualization.
+        import matplotlib
+
+        matplotlib.use("Agg")
+
+        import matplotlib.pyplot as plt
+
+        # Create visualization.
         image_display = np.array(
             image.convert("RGB").resize(
                 (224, 224)
@@ -474,7 +636,9 @@ def generate_battery_report(
             figsize=(6, 6)
         )
 
-        plt.imshow(image_display)
+        plt.imshow(
+            image_display
+        )
 
         plt.imshow(
             cam,
@@ -484,7 +648,7 @@ def generate_battery_report(
 
         plt.axis("off")
 
-        # Save visualization temporarily
+        # Save visualization temporarily.
         cam_buffer = io.BytesIO()
 
         plt.savefig(
@@ -526,6 +690,7 @@ def generate_battery_report(
     ]
 
     for step in pipeline:
+
         document.add_paragraph(
             step,
             style="List Bullet"
@@ -601,6 +766,7 @@ def generate_battery_report(
         cells = table.add_row().cells
 
         for i, value in enumerate(row_data):
+
             cells[i].text = value
 
     # ----------------------------------------
@@ -646,108 +812,40 @@ def generate_battery_report(
     # ----------------------------------------
 
     if filename is None:
+
         filename = "battery_inspection_report"
 
-    filename = os.path.splitext(filename)[0]
+    filename = os.path.splitext(
+        filename
+    )[0]
 
     report_path = os.path.join(
         REPORTS_PATH,
         f"{filename}_report.docx"
     )
 
-    document.save(report_path)
+    document.save(
+        report_path
+    )
 
     return report_path
 
-# ============================================
-# 12 — FASTAPI BACKEND
-# CELL 1 — Imports
-# ============================================
 
-from fastapi import (
-    FastAPI,
-    UploadFile,
-    File,
-    HTTPException
-)
-
-from fastapi.middleware.cors import CORSMiddleware
-
-from fastapi.responses import FileResponse
-
-from PIL import Image
-
-import io
-import base64
-
-print("FastAPI imports ready ✅")
-
-# ============================================
-# CELL 2 — FastAPI Application
-# ============================================
-
-app = FastAPI(
-    title="BatteryVision AI API",
-    description="AI-Assisted Battery Surface Inspection API",
-    version="1.0.0"
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"]
-)
-
-print("FastAPI application created ✅")
-
-# ============================================
-# CELL 3 — Health Endpoint
-# ============================================
-
-@app.get("/health")
-def health_check():
-
-    return {
-        "status": "healthy",
-        "model": "Fine-tuned ResNet18",
-        "device": str(device),
-        "num_classes": len(class_names)
-    }
-
-print("Health endpoint registered ✅")
-
-# ============================================
-# CELL 4 — Image Validation
-# ============================================
-
-ALLOWED_IMAGE_TYPES = {
-    "image/jpeg",
-    "image/png",
-    "image/webp"
-}
-
-def validate_image_file(file):
-
-    if file.content_type not in ALLOWED_IMAGE_TYPES:
-
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Unsupported image format. "
-                "Use JPEG, PNG, or WEBP."
-            )
-        )
-
-# ============================================
-# CELL 5 — Grad-CAM Encoding
-# ============================================
+# ============================================================
+# Image Encoding
+# ============================================================
 
 def gradcam_to_base64(
     image,
     cam
 ):
+
+    # Matplotlib is imported only when required.
+    import matplotlib
+
+    matplotlib.use("Agg")
+
+    import matplotlib.pyplot as plt
 
     image_display = np.array(
         image.convert("RGB").resize(
@@ -759,7 +857,9 @@ def gradcam_to_base64(
         figsize=(6, 6)
     )
 
-    plt.imshow(image_display)
+    plt.imshow(
+        image_display
+    )
 
     plt.imshow(
         cam,
@@ -788,9 +888,10 @@ def gradcam_to_base64(
 
     return encoded
 
-# ============================================
-# CELL 6 — Prediction Endpoint
-# ============================================
+
+# ============================================================
+# Prediction Endpoint
+# ============================================================
 
 @app.post("/predict")
 async def predict_endpoint(
@@ -798,7 +899,9 @@ async def predict_endpoint(
     explain: bool = True
 ):
 
-    validate_image_file(file)
+    validate_image_file(
+        file
+    )
 
     contents = await file.read()
 
@@ -823,10 +926,15 @@ async def predict_endpoint(
     confidence = result["confidence"]
 
     if confidence >= 0.80:
+
         confidence_level = "High"
+
     elif confidence >= 0.60:
+
         confidence_level = "Moderate"
+
     else:
+
         confidence_level = "Low"
 
     response = {
@@ -853,16 +961,19 @@ async def predict_endpoint(
 
     return response
 
-# ============================================
-# CELL 7 — Report Endpoint
-# ============================================
+
+# ============================================================
+# Report Endpoint
+# ============================================================
 
 @app.post("/report")
 async def report_endpoint(
     file: UploadFile = File(...)
 ):
 
-    validate_image_file(file)
+    validate_image_file(
+        file
+    )
 
     contents = await file.read()
 
@@ -892,7 +1003,9 @@ async def report_endpoint(
 
     return FileResponse(
         path=report_path,
-        filename=os.path.basename(report_path),
+        filename=os.path.basename(
+            report_path
+        ),
         media_type=(
             "application/vnd.openxmlformats-"
             "officedocument.wordprocessingml.document"
