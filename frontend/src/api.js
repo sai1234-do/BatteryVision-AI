@@ -1,5 +1,5 @@
 const API_BASE_URL =
-  "https://gene-seen-alot-scsi.trycloudflare.com";
+  "https://batteryvision-ai.onrender.com";
 
 export async function checkHealth() {
   const response = await fetch(`${API_BASE_URL}/health`);

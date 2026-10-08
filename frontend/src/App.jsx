@@ -1,8 +1,10 @@
+
 import { useState } from "react";
 import "./styles.css";
 
 const API_BASE_URL =
-  "https://gene-seen-alot-scsi.trycloudflare.com";
+  "https://batteryvision-ai.onrender.com";
+
 function App() {
   const [selectedFile, setSelectedFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
@@ -94,67 +96,63 @@ function App() {
       setAnalyzing(false);
     }
   }
+
   async function generateReport() {
-  if (!selectedFile || !result) {
-    setError("Analyze an image before generating the report.");
-    return;
-  }
-
-  setGeneratingReport(true);
-  setError("");
-
-  try {
-    const formData = new FormData();
-    formData.append("file", selectedFile);
-
-    const response = await fetch(
-      `${API_BASE_URL}/report`,
-      {
-        method: "POST",
-        body: formData,
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error(
-        `Report generation failed: ${response.status}`
-      );
+    if (!selectedFile || !result) {
+      setError("Analyze an image before generating the report.");
+      return;
     }
 
-    // FastAPI returns the DOCX file.
-    const blob = await response.blob();
+    setGeneratingReport(true);
+    setError("");
 
-    // Create temporary download URL.
-    const downloadUrl =
-      window.URL.createObjectURL(blob);
+    try {
+      const formData = new FormData();
+      formData.append("file", selectedFile);
 
-    // Create temporary download link.
-    const link = document.createElement("a");
+      const response = await fetch(
+        `${API_BASE_URL}/report`,
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
 
-    link.href = downloadUrl;
+      if (!response.ok) {
+        throw new Error(
+          `Report generation failed: ${response.status}`
+        );
+      }
 
-    link.download =
-      `BatteryVision_Inspection_Report_${Date.now()}.docx`;
+      const blob = await response.blob();
 
-    document.body.appendChild(link);
+      const downloadUrl =
+        window.URL.createObjectURL(blob);
 
-    // Start download.
-    link.click();
+      const link = document.createElement("a");
 
-    // Cleanup.
-    link.remove();
-    window.URL.revokeObjectURL(downloadUrl);
+      link.href = downloadUrl;
 
-  } catch (err) {
-    console.error("Report generation error:", err);
+      link.download =
+        `BatteryVision_Inspection_Report_${Date.now()}.docx`;
 
-    setError(
-      "Unable to generate the inspection report."
-    );
-  } finally {
-    setGeneratingReport(false);
+      document.body.appendChild(link);
+
+      link.click();
+
+      link.remove();
+      window.URL.revokeObjectURL(downloadUrl);
+
+    } catch (err) {
+      console.error("Report generation error:", err);
+
+      setError(
+        "Unable to generate the inspection report."
+      );
+    } finally {
+      setGeneratingReport(false);
+    }
   }
-}
 
   function resetInspection() {
     setSelectedFile(null);
@@ -673,17 +671,17 @@ function App() {
 
           </div>
 
-          <button 
-             className="report-button" 
-             onClick={generateReport}
-             disabled={!result || generatingReport} 
-          > 
+          <button
+            className="report-button"
+            onClick={generateReport}
+            disabled={!result || generatingReport}
+          >
             {generatingReport
-                 ? "GENERATING REPORT..."
-                 : "GENERATE INSPECTION REPORT"
+              ? "GENERATING REPORT..."
+              : "GENERATE INSPECTION REPORT"
             }
-            <span>↗</span> 
-         </button>
+            <span>↗</span>
+          </button>
 
         </section>
 

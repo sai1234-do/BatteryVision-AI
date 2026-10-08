@@ -1,15 +1,17 @@
 # ============================================================
 # BatteryVision AI — Production Backend
+# Memory-Optimized for Render Free (512 MB)
 # ============================================================
 
 import os
 import io
 import base64
+import threading
 from datetime import datetime
 
 import numpy as np
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 from fastapi import (
     FastAPI,
@@ -51,11 +53,24 @@ os.makedirs(REPORTS_PATH, exist_ok=True)
 
 
 # ============================================================
+# Safety / Resource Limits
+# ============================================================
+
+# Maximum uploaded file size.
+MAX_UPLOAD_SIZE = 8 * 1024 * 1024  # 8 MB
+
+# Maximum decoded image dimensions.
+# This protects the server from huge phone/camera images.
+MAX_IMAGE_DIMENSION = 1600
+
+# Pillow protection against extremely large images.
+Image.MAX_IMAGE_PIXELS = 20_000_000
+
+
+# ============================================================
 # Production device
 # ============================================================
 
-# Keep this lightweight at startup.
-# The actual PyTorch device is created when the model is loaded.
 device = "cpu"
 
 print("BatteryVision AI starting...")
@@ -79,7 +94,6 @@ class_names = [
 NUM_CLASSES = len(class_names)
 
 print("Number of classes:", NUM_CLASSES)
-print("Classes:")
 
 for index, class_name in enumerate(class_names):
     print(index, "->", class_name)
@@ -89,16 +103,12 @@ for index, class_name in enumerate(class_names):
 # Lazy Model State
 # ============================================================
 
-# The model is intentionally NOT loaded during application startup.
-#
-# This allows the web server to start first on resource-limited
-# deployment platforms such as Render Free.
-#
-# The model will be loaded automatically when /predict or /report
-# receives the first image request.
-
 resnet = None
 target_layer = None
+
+# Prevent two simultaneous requests from creating
+# multiple large PyTorch computation graphs.
+inference_lock = threading.Lock()
 
 
 # ============================================================
@@ -106,30 +116,32 @@ target_layer = None
 # ============================================================
 
 def load_model():
-    """
-    Load the fine-tuned ResNet18 model only when it is needed.
-
-    This prevents PyTorch, Torchvision model construction, and
-    the checkpoint from being loaded during FastAPI startup.
-    """
 
     global resnet
     global target_layer
     global device
 
-    # Model already loaded.
     if resnet is not None:
         return
 
     print("Loading fine-tuned ResNet18...")
 
-    # Heavy ML imports are intentionally delayed until inference.
     import torch
     from torchvision import models
 
+    # Reduce CPU thread overhead on the tiny Render instance.
+    torch.set_num_threads(1)
+
+    try:
+        torch.set_num_interop_threads(1)
+    except RuntimeError:
+        # Safe if PyTorch has already initialized
+        # its inter-op thread pool.
+        pass
+
     device = torch.device("cpu")
 
-    # Instantiate ResNet18 model structure.
+    # Build ResNet18 without pretrained weights.
     model = models.resnet18(weights=None)
 
     num_ftrs = model.fc.in_features
@@ -139,44 +151,39 @@ def load_model():
         NUM_CLASSES
     )
 
-    # Verify checkpoint exists.
     if not os.path.exists(FINETUNED_MODEL_PATH):
 
-        raise FileNotFoundError(
-            f"Checkpoint not found at {FINETUNED_MODEL_PATH}"
+        raise RuntimeError(
+            f"Checkpoint not found at "
+            f"{FINETUNED_MODEL_PATH}"
         )
 
-    # Load fine-tuned checkpoint.
+    # Load only the checkpoint data required for inference.
     checkpoint = torch.load(
         FINETUNED_MODEL_PATH,
         map_location=device,
         weights_only=False
     )
 
-    # Load trained weights.
     model.load_state_dict(
         checkpoint["model_state_dict"]
     )
+
+    # Release checkpoint reference immediately.
+    del checkpoint
 
     model = model.to(device)
 
     model.eval()
 
-    # Store globally for subsequent requests.
     resnet = model
 
     # Grad-CAM target layer.
     target_layer = resnet.layer4[-1]
 
     print(
-        "Loaded fine-tuned ResNet18 checkpoint successfully."
+        "Loaded fine-tuned ResNet18 successfully."
     )
-
-    print(
-        "Grad-CAM target layer:"
-    )
-
-    print(target_layer)
 
 
 # ============================================================
@@ -189,12 +196,18 @@ app = FastAPI(
     version="1.0.0"
 )
 
+
+# ============================================================
+# CORS
+# ============================================================
+
+# This application does not use browser credentials/cookies.
+# Therefore wildcard CORS is safe for this public demo API
+# and prevents deployment-origin problems.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173"
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"]
 )
@@ -213,7 +226,8 @@ def health_check():
         "status": "healthy",
         "model": "Fine-tuned ResNet18",
         "device": str(device),
-        "num_classes": len(class_names)
+        "num_classes": NUM_CLASSES,
+        "model_loaded": resnet is not None
     }
 
 
@@ -244,6 +258,112 @@ def validate_image_file(file):
         )
 
 
+async def read_uploaded_image(file):
+
+    validate_image_file(file)
+
+    contents = await file.read(
+        MAX_UPLOAD_SIZE + 1
+    )
+
+    if len(contents) > MAX_UPLOAD_SIZE:
+
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "Image is too large. "
+                "Maximum allowed size is 8 MB."
+            )
+        )
+
+    try:
+
+        image = Image.open(
+            io.BytesIO(contents)
+        )
+
+        # Force actual image decoding while
+        # the uploaded buffer is still available.
+        image.load()
+
+        image = image.convert("RGB")
+
+        # Reduce huge camera images before inference.
+        if (
+            image.width > MAX_IMAGE_DIMENSION
+            or image.height > MAX_IMAGE_DIMENSION
+        ):
+
+            image.thumbnail(
+                (
+                    MAX_IMAGE_DIMENSION,
+                    MAX_IMAGE_DIMENSION
+                ),
+                Image.Resampling.LANCZOS
+            )
+
+        return image
+
+    except Exception:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Unable to read the uploaded image."
+        )
+
+    finally:
+
+        # Release the raw upload buffer.
+        del contents
+
+
+# ============================================================
+# Inference Preprocessing
+# ============================================================
+
+INFERENCE_IMAGE_SIZE = 224
+
+print("Inference configuration ready.")
+print("Image size:", INFERENCE_IMAGE_SIZE)
+print("Model:", "Fine-tuned ResNet18")
+print("Classes:", class_names)
+
+
+def preprocess_image(image):
+
+    import torch
+    from torchvision import transforms
+
+    transform = transforms.Compose([
+        transforms.Resize(
+            256,
+            antialias=True
+        ),
+        transforms.CenterCrop(
+            INFERENCE_IMAGE_SIZE
+        ),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=[
+                0.485,
+                0.456,
+                0.406
+            ],
+            std=[
+                0.229,
+                0.224,
+                0.225
+            ]
+        )
+    ])
+
+    tensor = transform(
+        image
+    )
+
+    return tensor
+
+
 # ============================================================
 # Grad-CAM
 # ============================================================
@@ -255,25 +375,35 @@ def generate_gradcam(
     device
 ):
 
-    # Import PyTorch functionality only when Grad-CAM
-    # is actually requested.
+    import torch
     import torch.nn.functional as F
 
-    model.eval()
-
-    # Store activations and gradients.
     activations = []
     gradients = []
 
-    # Forward hook.
-    def forward_hook(module, input, output):
-        activations.append(output)
+    def forward_hook(
+        module,
+        module_input,
+        output
+    ):
 
-    # Backward hook.
-    def backward_hook(module, grad_input, grad_output):
-        gradients.append(grad_output[0])
+        # Detach immediately.
+        # We only need the activation values,
+        # not their computation graph.
+        activations.append(
+            output.detach()
+        )
 
-    # Register hooks.
+    def backward_hook(
+        module,
+        grad_input,
+        grad_output
+    ):
+
+        gradients.append(
+            grad_output[0].detach()
+        )
+
     forward_handle = target_layer.register_forward_hook(
         forward_hook
     )
@@ -284,143 +414,15 @@ def generate_gradcam(
 
     try:
 
-        # Prepare image.
-        image = image_tensor.unsqueeze(0).to(device)
+        image_batch = image_tensor.unsqueeze(
+            0
+        ).to(device)
 
-        # Forward pass.
-        output = model(image)
-
-        # Predicted class.
-        predicted_class = output.argmax(
-            dim=1
-        ).item()
-
-        # Score of predicted class.
-        score = output[
-            0,
-            predicted_class
-        ]
-
-        # Clear gradients.
-        model.zero_grad()
-
-        # Backpropagate.
-        score.backward()
-
-        # Get stored values.
-        activation = activations[0]
-        gradient = gradients[0]
-
-        # Average gradient over height and width.
-        weights = gradient.mean(
-            dim=(2, 3),
-            keepdim=True
-        )
-
-        # Weighted combination of feature maps.
-        cam = (
-            weights * activation
-        ).sum(
-            dim=1,
-            keepdim=True
-        )
-
-        # ReLU.
-        cam = F.relu(cam)
-
-        # Resize heatmap to image size.
-        cam = F.interpolate(
-            cam,
-            size=(224, 224),
-            mode="bilinear",
-            align_corners=False
-        )
-
-        # Remove unnecessary dimensions.
-        cam = (
-            cam.squeeze()
-            .detach()
-            .cpu()
-            .numpy()
-        )
-
-        # Normalize between 0 and 1.
-        cam = cam - cam.min()
-
-        if cam.max() > 0:
-            cam = cam / cam.max()
-
-        return cam, predicted_class
-
-    finally:
-
-        # Always remove hooks, even if inference fails.
-        forward_handle.remove()
-        backward_handle.remove()
-
-
-# ============================================================
-# Inference Configuration
-# ============================================================
-
-INFERENCE_IMAGE_SIZE = 224
-
-print("Inference configuration ready.")
-print("Image size:", INFERENCE_IMAGE_SIZE)
-print("Model:", "Fine-tuned ResNet18")
-print("Classes:", class_names)
-
-
-# ============================================================
-# Image Preprocessing
-# ============================================================
-
-def preprocess_image(image):
-    """
-    Convert a PIL image into the tensor format
-    expected by the fine-tuned ResNet18.
-    """
-
-    # Torchvision is imported only when an image
-    # actually needs preprocessing.
-    from torchvision import transforms
-
-    transform = transforms.Compose([
-        transforms.Resize(256),
-        transforms.CenterCrop(INFERENCE_IMAGE_SIZE),
-        transforms.ToTensor(),
-        transforms.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225]
-        )
-    ])
-
-    return transform(
-        image.convert("RGB")
-    )
-
-
-# ============================================================
-# Prediction
-# ============================================================
-
-def predict_image(image):
-
-    # Ensure model is loaded before inference.
-    load_model()
-
-    import torch
-
-    model_input = preprocess_image(image)
-
-    model_input = model_input.unsqueeze(
-        0
-    ).to(device)
-
-    with torch.inference_mode():
-
-        output = resnet(
-            model_input
+        # Gradients are required for Grad-CAM,
+        # so this section intentionally does NOT use
+        # inference_mode().
+        output = model(
+            image_batch
         )
 
         probabilities = torch.softmax(
@@ -437,12 +439,145 @@ def predict_image(image):
             predicted_class
         ].item()
 
-    return {
-        "class_name": class_names[predicted_class],
-        "class_index": predicted_class,
-        "confidence": confidence
-    }
+        score = output[
+            0,
+            predicted_class
+        ]
 
+        model.zero_grad(
+            set_to_none=True
+        )
+
+        score.backward()
+
+        if not activations or not gradients:
+
+            raise RuntimeError(
+                "Grad-CAM hooks did not capture "
+                "required tensors."
+            )
+
+        activation = activations[0]
+
+        gradient = gradients[0]
+
+        # Global average pooling of gradients.
+        weights = gradient.mean(
+            dim=(2, 3),
+            keepdim=True
+        )
+
+        cam = (
+            weights * activation
+        ).sum(
+            dim=1,
+            keepdim=True
+        )
+
+        cam = F.relu(
+            cam
+        )
+
+        cam = F.interpolate(
+            cam,
+            size=(
+                INFERENCE_IMAGE_SIZE,
+                INFERENCE_IMAGE_SIZE
+            ),
+            mode="bilinear",
+            align_corners=False
+        )
+
+        cam = (
+            cam.squeeze()
+            .cpu()
+            .numpy()
+        )
+
+        cam -= cam.min()
+
+        cam_max = cam.max()
+
+        if cam_max > 0:
+
+            cam /= cam_max
+
+        return (
+            cam,
+            predicted_class,
+            confidence
+        )
+
+    finally:
+
+        forward_handle.remove()
+        backward_handle.remove()
+
+        # Release temporary tensors.
+        activations.clear()
+        gradients.clear()
+
+        model.zero_grad(
+            set_to_none=True
+        )
+
+
+# ============================================================
+# Lightweight Heatmap Generation
+# ============================================================
+
+def create_gradcam_image(original_image, cam):
+
+    import numpy as np
+
+    original = original_image.convert("RGB")
+    original = original.resize((IMAGE_SIZE, IMAGE_SIZE))
+
+    cam_array = cam.numpy()
+
+    # Normalize CAM to 0-255
+    cam_array = np.clip(cam_array, 0, 1)
+    cam_uint8 = (cam_array * 255).astype(np.uint8)
+
+    # Create a heatmap similar to the traditional
+    # red/yellow/blue Grad-CAM visualization.
+    heatmap = np.zeros(
+        (IMAGE_SIZE, IMAGE_SIZE, 3),
+        dtype=np.uint8
+    )
+
+    # Blue -> Cyan -> Yellow -> Red
+    heatmap[:, :, 0] = np.clip(
+        255 * (2 * cam_array - 0.5),
+        0,
+        255
+    )
+
+    heatmap[:, :, 1] = np.clip(
+        255 * (2 * cam_array),
+        0,
+        255
+    )
+
+    heatmap[:, :, 2] = np.clip(
+        255 * (1 - 2 * cam_array),
+        0,
+        255
+    )
+
+    heatmap_image = Image.fromarray(
+        heatmap,
+        mode="RGB"
+    )
+
+    # Blend original image with heatmap
+    overlay = Image.blend(
+        original,
+        heatmap_image,
+        alpha=0.45
+    )
+
+    return overlay
 
 # ============================================================
 # Complete Image Analysis
@@ -453,43 +588,71 @@ def analyze_image(
     generate_explanation=True
 ):
 
-    # Ensure model is loaded.
     load_model()
 
-    prediction = predict_image(
+    image_tensor = preprocess_image(
         image
     )
 
-    result = {
-        "prediction": prediction["class_name"],
-        "confidence": prediction["confidence"],
-        "model": "Fine-tuned ResNet18"
-    }
+    with inference_lock:
 
-    if generate_explanation:
+        if generate_explanation:
 
-        image_tensor = preprocess_image(
-            image
-        )
+            # ONE forward pass provides:
+            # prediction + confidence + Grad-CAM.
+            cam, predicted_class, confidence = (
+                generate_gradcam(
+                    model=resnet,
+                    image_tensor=image_tensor,
+                    target_layer=target_layer,
+                    device=device
+                )
+            )
 
-        cam, predicted_class = generate_gradcam(
-            model=resnet,
-            image_tensor=image_tensor,
-            target_layer=target_layer,
-            device=device
-        )
+            gradcam_png = create_gradcam_overlay(
+                image,
+                cam
+            )
 
-        result["gradcam"] = cam
+        else:
 
-        result["predicted_class_index"] = (
+            import torch
+
+            model_input = image_tensor.unsqueeze(
+                0
+            ).to(device)
+
+            with torch.inference_mode():
+
+                output = resnet(
+                    model_input
+                )
+
+                probabilities = torch.softmax(
+                    output,
+                    dim=1
+                )
+
+                predicted_class = probabilities.argmax(
+                    dim=1
+                ).item()
+
+                confidence = probabilities[
+                    0,
+                    predicted_class
+                ].item()
+
+            gradcam_png = None
+
+    return {
+        "prediction": class_names[
             predicted_class
-        )
-
-    else:
-
-        result["gradcam"] = None
-
-    return result
+        ],
+        "confidence": confidence,
+        "model": "Fine-tuned ResNet18",
+        "gradcam_png": gradcam_png,
+        "predicted_class_index": predicted_class
+    }
 
 
 # ============================================================
@@ -508,26 +671,30 @@ def generate_battery_report(
 
     document = Document()
 
-    # ----------------------------------------
+    # ========================================================
     # Title
-    # ----------------------------------------
+    # ========================================================
 
     title = document.add_heading(
         "BatteryVision AI",
         level=0
     )
 
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title.alignment = (
+        WD_ALIGN_PARAGRAPH.CENTER
+    )
 
     subtitle = document.add_paragraph(
         "AI-Assisted Battery Surface Inspection Report"
     )
 
-    subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    subtitle.alignment = (
+        WD_ALIGN_PARAGRAPH.CENTER
+    )
 
-    # ----------------------------------------
+    # ========================================================
     # Date
-    # ----------------------------------------
+    # ========================================================
 
     document.add_paragraph(
         f"Inspection Date: "
@@ -536,9 +703,9 @@ def generate_battery_report(
 
     document.add_paragraph("")
 
-    # ----------------------------------------
+    # ========================================================
     # Inspection Summary
-    # ----------------------------------------
+    # ========================================================
 
     document.add_heading(
         "Inspection Summary",
@@ -561,10 +728,6 @@ def generate_battery_report(
         "Model: Fine-tuned ResNet18"
     )
 
-    # ----------------------------------------
-    # Confidence Interpretation
-    # ----------------------------------------
-
     if confidence >= 0.80:
 
         confidence_note = "High confidence"
@@ -581,9 +744,9 @@ def generate_battery_report(
         f"Confidence Level: {confidence_note}"
     )
 
-    # ----------------------------------------
+    # ========================================================
     # Original Image
-    # ----------------------------------------
+    # ========================================================
 
     document.add_heading(
         "Inspected Image",
@@ -592,9 +755,24 @@ def generate_battery_report(
 
     image_stream = io.BytesIO()
 
-    image.convert("RGB").save(
+    # Use a controlled-size JPEG for the report.
+    report_image = image.convert(
+        "RGB"
+    ).copy()
+
+    report_image.thumbnail(
+        (
+            1400,
+            1400
+        ),
+        Image.Resampling.LANCZOS
+    )
+
+    report_image.save(
         image_stream,
-        format="JPEG"
+        format="JPEG",
+        quality=82,
+        optimize=True
     )
 
     image_stream.seek(0)
@@ -604,62 +782,20 @@ def generate_battery_report(
         width=Inches(5.5)
     )
 
-    # ----------------------------------------
+    # ========================================================
     # Grad-CAM
-    # ----------------------------------------
+    # ========================================================
 
-    if result.get("gradcam") is not None:
+    if result.get("gradcam_png") is not None:
 
         document.add_heading(
             "Grad-CAM Explanation",
             level=1
         )
 
-        cam = result["gradcam"]
-
-        # Import Matplotlib only when generating
-        # the visualization.
-        import matplotlib
-
-        matplotlib.use("Agg")
-
-        import matplotlib.pyplot as plt
-
-        # Create visualization.
-        image_display = np.array(
-            image.convert("RGB").resize(
-                (224, 224)
-            )
-        ) / 255.0
-
-        plt.figure(
-            figsize=(6, 6)
+        cam_buffer = io.BytesIO(
+            result["gradcam_png"]
         )
-
-        plt.imshow(
-            image_display
-        )
-
-        plt.imshow(
-            cam,
-            cmap="jet",
-            alpha=0.45
-        )
-
-        plt.axis("off")
-
-        # Save visualization temporarily.
-        cam_buffer = io.BytesIO()
-
-        plt.savefig(
-            cam_buffer,
-            format="PNG",
-            bbox_inches="tight"
-        )
-
-        plt.close()
-
-        cam_buffer.seek(0)
 
         document.add_picture(
             cam_buffer,
@@ -672,9 +808,9 @@ def generate_battery_report(
             "to the model's prediction."
         )
 
-    # ----------------------------------------
+    # ========================================================
     # Processing Pipeline
-    # ----------------------------------------
+    # ========================================================
 
     document.add_heading(
         "Processing Pipeline",
@@ -696,9 +832,9 @@ def generate_battery_report(
             style="List Bullet"
         )
 
-    # ----------------------------------------
+    # ========================================================
     # Model Information
-    # ----------------------------------------
+    # ========================================================
 
     document.add_heading(
         "Model Information",
@@ -710,16 +846,17 @@ def generate_battery_report(
     )
 
     document.add_paragraph(
-        "Training strategy: Transfer learning + fine-tuning"
+        "Training strategy: "
+        "Transfer learning + fine-tuning"
     )
 
     document.add_paragraph(
         "Number of classes: 7"
     )
 
-    # ----------------------------------------
+    # ========================================================
     # Performance
-    # ----------------------------------------
+    # ========================================================
 
     document.add_heading(
         "Model Performance",
@@ -765,13 +902,15 @@ def generate_battery_report(
 
         cells = table.add_row().cells
 
-        for i, value in enumerate(row_data):
+        for index, value in enumerate(
+            row_data
+        ):
 
-            cells[i].text = value
+            cells[index].text = value
 
-    # ----------------------------------------
+    # ========================================================
     # Limitations
-    # ----------------------------------------
+    # ========================================================
 
     document.add_heading(
         "Limitations",
@@ -791,9 +930,9 @@ def generate_battery_report(
         "prove causal reasoning."
     )
 
-    # ----------------------------------------
+    # ========================================================
     # Conclusion
-    # ----------------------------------------
+    # ========================================================
 
     document.add_heading(
         "Conclusion",
@@ -807,9 +946,9 @@ def generate_battery_report(
         "visual explanation through Grad-CAM."
     )
 
-    # ----------------------------------------
+    # ========================================================
     # Save
-    # ----------------------------------------
+    # ========================================================
 
     if filename is None:
 
@@ -819,9 +958,22 @@ def generate_battery_report(
         filename
     )[0]
 
+    # Remove potentially problematic characters.
+    safe_filename = "".join(
+        character
+        if character.isalnum()
+        or character in (
+            "_",
+            "-",
+            " "
+        )
+        else "_"
+        for character in filename
+    )
+
     report_path = os.path.join(
         REPORTS_PATH,
-        f"{filename}_report.docx"
+        f"{safe_filename}_report.docx"
     )
 
     document.save(
@@ -829,64 +981,6 @@ def generate_battery_report(
     )
 
     return report_path
-
-
-# ============================================================
-# Image Encoding
-# ============================================================
-
-def gradcam_to_base64(
-    image,
-    cam
-):
-
-    # Matplotlib is imported only when required.
-    import matplotlib
-
-    matplotlib.use("Agg")
-
-    import matplotlib.pyplot as plt
-
-    image_display = np.array(
-        image.convert("RGB").resize(
-            (224, 224)
-        )
-    ) / 255.0
-
-    plt.figure(
-        figsize=(6, 6)
-    )
-
-    plt.imshow(
-        image_display
-    )
-
-    plt.imshow(
-        cam,
-        cmap="jet",
-        alpha=0.45
-    )
-
-    plt.axis("off")
-
-    buffer = io.BytesIO()
-
-    plt.savefig(
-        buffer,
-        format="PNG",
-        bbox_inches="tight",
-        pad_inches=0
-    )
-
-    plt.close()
-
-    buffer.seek(0)
-
-    encoded = base64.b64encode(
-        buffer.read()
-    ).decode("utf-8")
-
-    return encoded
 
 
 # ============================================================
@@ -899,29 +993,31 @@ async def predict_endpoint(
     explain: bool = True
 ):
 
-    validate_image_file(
+    image = await read_uploaded_image(
         file
     )
 
-    contents = await file.read()
-
     try:
 
-        image = Image.open(
-            io.BytesIO(contents)
-        ).convert("RGB")
-
-    except Exception:
-
-        raise HTTPException(
-            status_code=400,
-            detail="Unable to read the uploaded image."
+        result = analyze_image(
+            image,
+            generate_explanation=explain
         )
 
-    result = analyze_image(
-        image,
-        generate_explanation=explain
-    )
+    except Exception as error:
+
+        print(
+            "Prediction error:",
+            repr(error)
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "AI inference failed. "
+                "Check backend logs."
+            )
+        )
 
     confidence = result["confidence"]
 
@@ -948,15 +1044,18 @@ async def predict_endpoint(
         "confidence_level": confidence_level,
         "model": result["model"],
         "explanation_generated": (
-            result["gradcam"] is not None
+            result["gradcam_png"] is not None
         )
     }
 
-    if result["gradcam"] is not None:
+    if result["gradcam_png"] is not None:
 
-        response["gradcam"] = gradcam_to_base64(
-            image,
-            result["gradcam"]
+        response["gradcam"] = (
+            base64.b64encode(
+                result["gradcam_png"]
+            ).decode(
+                "utf-8"
+            )
         )
 
     return response
@@ -971,35 +1070,37 @@ async def report_endpoint(
     file: UploadFile = File(...)
 ):
 
-    validate_image_file(
+    image = await read_uploaded_image(
         file
     )
 
-    contents = await file.read()
-
     try:
 
-        image = Image.open(
-            io.BytesIO(contents)
-        ).convert("RGB")
-
-    except Exception:
-
-        raise HTTPException(
-            status_code=400,
-            detail="Unable to read the uploaded image."
+        result = analyze_image(
+            image,
+            generate_explanation=True
         )
 
-    result = analyze_image(
-        image,
-        generate_explanation=True
-    )
+        report_path = generate_battery_report(
+            image,
+            result,
+            file.filename
+        )
 
-    report_path = generate_battery_report(
-        image,
-        result,
-        file.filename
-    )
+    except Exception as error:
+
+        print(
+            "Report generation error:",
+            repr(error)
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Inspection report generation failed. "
+                "Check backend logs."
+            )
+        )
 
     return FileResponse(
         path=report_path,

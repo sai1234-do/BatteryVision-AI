@@ -4,6 +4,6 @@ python-multipart
 torch
 torchvision
 numpy
-matplotlib
+
 Pillow
 python-docx
