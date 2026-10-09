@@ -1,9 +1,9 @@
 
 import { useState } from "react";
+import { Client } from "@gradio/client";
 import "./styles.css";
 
-const API_BASE_URL =
-  "https://batteryvision-ai.onrender.com";
+
 
 function App() {
   const [selectedFile, setSelectedFile] = useState(null);
@@ -51,108 +51,120 @@ function App() {
     handleFile(file);
   }
 
-  async function analyzeImage() {
-    if (!selectedFile) {
-      setError("Select an image before starting inspection.");
-      return;
-    }
-
-    setAnalyzing(true);
-    setError("");
-    setResult(null);
-    setGradcam(null);
-
-    try {
-      const formData = new FormData();
-      formData.append("file", selectedFile);
-
-      const response = await fetch(
-        `${API_BASE_URL}/predict?explain=true`,
-        {
-          method: "POST",
-          body: formData,
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error("AI analysis failed.");
-      }
-
-      const data = await response.json();
-
-      setResult(data);
-
-      if (data.gradcam) {
-        setGradcam(
-          `data:image/png;base64,${data.gradcam}`
-        );
-      }
-    } catch (err) {
-      console.error(err);
-      setError(
-        "Unable to connect to the BatteryVision AI backend."
-      );
-    } finally {
-      setAnalyzing(false);
-    }
+ async function analyzeImage() {
+  if (!selectedFile) {
+    setError("Select an image before starting inspection.");
+    return;
   }
 
-  async function generateReport() {
-    if (!selectedFile || !result) {
-      setError("Analyze an image before generating the report.");
-      return;
-    }
+  setAnalyzing(true);
+  setError("");
+  setResult(null);
+  setGradcam(null);
 
-    setGeneratingReport(true);
-    setError("");
+  try {
+    const app = await Client.connect(
+      "Saihugg-45/batteryvision-ai"
+    );
 
-    try {
-      const formData = new FormData();
-      formData.append("file", selectedFile);
-
-      const response = await fetch(
-        `${API_BASE_URL}/report`,
-        {
-          method: "POST",
-          body: formData,
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error(
-          `Report generation failed: ${response.status}`
-        );
+    const response = await app.predict(
+      "/predict",
+      {
+        image: selectedFile,
       }
+    );
 
-      const blob = await response.blob();
+    const data = response.data;
 
-      const downloadUrl =
-        window.URL.createObjectURL(blob);
+    const prediction = data[0];
+    const confidence = data[1];
+    const confidenceLevel = data[2];
+    const gradcamFile = data[3];
+    const reportFile = data[4];
 
-      const link = document.createElement("a");
+    setResult({
+      prediction,
+      confidence_percent: confidence,
+      confidence_level: confidenceLevel,
+      model: "Fine-tuned ResNet18",
+      gradcamFile,
+      reportFile,
+    });
 
-      link.href = downloadUrl;
+    if (gradcamFile) {
+      const gradcamUrl =
+        typeof gradcamFile === "string"
+          ? gradcamFile
+          : gradcamFile.url;
 
-      link.download =
-        `BatteryVision_Inspection_Report_${Date.now()}.docx`;
-
-      document.body.appendChild(link);
-
-      link.click();
-
-      link.remove();
-      window.URL.revokeObjectURL(downloadUrl);
-
-    } catch (err) {
-      console.error("Report generation error:", err);
-
-      setError(
-        "Unable to generate the inspection report."
-      );
-    } finally {
-      setGeneratingReport(false);
+      setGradcam(gradcamUrl);
     }
+
+  } catch (err) {
+    console.error(
+      "HF inference error:",
+      err
+    );
+
+    setError(
+      "Unable to connect to the BatteryVision AI inference service."
+    );
+  } finally {
+    setAnalyzing(false);
   }
+}
+
+function generateReport() {
+  if (!result || !result.reportFile) {
+    setError(
+      "Analyze an image before generating the report."
+    );
+    return;
+  }
+
+  setGeneratingReport(true);
+  setError("");
+
+  try {
+    const reportFile = result.reportFile;
+
+    const reportUrl =
+      typeof reportFile === "string"
+        ? reportFile
+        : reportFile.url;
+
+    if (!reportUrl) {
+      throw new Error(
+        "Report file URL is unavailable."
+      );
+    }
+
+    const link = document.createElement("a");
+
+    link.href = reportUrl;
+
+    link.download =
+      `BatteryVision_Inspection_Report_${Date.now()}.docx`;
+
+    document.body.appendChild(link);
+
+    link.click();
+
+    link.remove();
+
+  } catch (err) {
+    console.error(
+      "Report download error:",
+      err
+    );
+
+    setError(
+      "Unable to download the inspection report."
+    );
+  } finally {
+    setGeneratingReport(false);
+  }
+}
 
   function resetInspection() {
     setSelectedFile(null);

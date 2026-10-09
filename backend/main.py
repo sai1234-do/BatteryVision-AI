@@ -322,6 +322,7 @@ async def read_uploaded_image(file):
 # ============================================================
 
 INFERENCE_IMAGE_SIZE = 224
+IMAGE_SIZE = INFERENCE_IMAGE_SIZE
 
 print("Inference configuration ready.")
 print("Image size:", INFERENCE_IMAGE_SIZE)
@@ -533,44 +534,46 @@ def create_gradcam_image(original_image, cam):
     original = original_image.convert("RGB")
     original = original.resize((IMAGE_SIZE, IMAGE_SIZE))
 
-    cam_array = cam.numpy()
+    cam_array = np.asarray(cam, dtype=np.float32)
+    cam_array = np.squeeze(cam_array)
 
-    # Normalize CAM to 0-255
+    if cam_array.ndim != 2:
+        raise ValueError(
+            "Grad-CAM heatmap must be a 2D array. "
+            "Received shape: "
+            f"{cam_array.shape}"
+        )
+
     cam_array = np.clip(cam_array, 0, 1)
-    cam_uint8 = (cam_array * 255).astype(np.uint8)
 
-    # Create a heatmap similar to the traditional
-    # red/yellow/blue Grad-CAM visualization.
     heatmap = np.zeros(
         (IMAGE_SIZE, IMAGE_SIZE, 3),
         dtype=np.uint8
     )
 
-    # Blue -> Cyan -> Yellow -> Red
     heatmap[:, :, 0] = np.clip(
         255 * (2 * cam_array - 0.5),
         0,
         255
-    )
+    ).astype(np.uint8)
 
     heatmap[:, :, 1] = np.clip(
         255 * (2 * cam_array),
         0,
         255
-    )
+    ).astype(np.uint8)
 
     heatmap[:, :, 2] = np.clip(
         255 * (1 - 2 * cam_array),
         0,
         255
-    )
+    ).astype(np.uint8)
 
     heatmap_image = Image.fromarray(
         heatmap,
         mode="RGB"
     )
 
-    # Blend original image with heatmap
     overlay = Image.blend(
         original,
         heatmap_image,
@@ -578,6 +581,20 @@ def create_gradcam_image(original_image, cam):
     )
 
     return overlay
+
+
+def create_gradcam_overlay(original_image, cam):
+
+    overlay = create_gradcam_image(
+        original_image,
+        cam
+    )
+
+    buffer = io.BytesIO()
+    overlay.save(buffer, format="PNG")
+    buffer.seek(0)
+
+    return buffer.getvalue()
 
 # ============================================================
 # Complete Image Analysis
